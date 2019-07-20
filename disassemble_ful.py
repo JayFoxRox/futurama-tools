@@ -227,11 +227,13 @@ def read_debug_symbols(f):
   debug_symbols = {}
 
   unk1 = read32(f)
+  assert(unk1 == 8)
   function_list = read32(f)
   type_list = read32(f) # Points to this field in next chunk 
   name = read_fix_string(f)
   debug_symbols['name'] = name
   unk4 = read32(f)
+  assert(unk4 == 0)
   member_count = read32(f)
   member_list = read32(f)
   #print("memberCount:%d memberList:%d; unk1:0x%08X function_list:%d type_list:%d unk4:%d; library '%s'" % (member_count, member_list, unk1, function_list, type_list, unk4, name))
@@ -287,7 +289,7 @@ with open(debug_path, "rb") as f:
   print("# Loaded debug symbols '%s' (Target script: '%s')" % (debug_path, debug_symbols['name']))
 
 if True:
-  for t in debug_symbols['types']:
+  for t in sorted(debug_symbols['types']):
     print("# %d: %s" % (t, str(debug_symbols['types'][t])))
 
 if True:
@@ -320,6 +322,7 @@ with open(script_path, "rb") as f:
   for i in range((HEADER_LENGTH - 4) // 4):
 
     comments = {
+      12: "Variable space size",
       32: "ExitPoint address"
     }
 
@@ -341,6 +344,7 @@ with open(script_path, "rb") as f:
 
   def find_variable_by_address(address):
     variables = []
+    #FIXME: This assumes the variables are sorted by address
     for variable in debug_symbols['variables'][::-1]:
       offset = address - variable['offset']
       if offset >= 0:
@@ -353,12 +357,13 @@ with open(script_path, "rb") as f:
       if offset == 0:
         return True
       return False
+    #FIXME: This assumes the members are sorted by offset
     for member in type_information['members'][::-1]:
       if offset >= member['offset']:
         return member
     return None
 
-  def get_type_member_path(type_index, offset):
+  def find_type_member_path(type_index, offset):
     def search(path, type_index, offset):
       member = find_type_member_by_offset(type_index, offset)
       if member == False:
@@ -380,7 +385,6 @@ with open(script_path, "rb") as f:
     if path == False:
       return None
     path = [x['name'] if x != None else "???" for x in path]
-    path = [debug_symbols['types'][type_index]['name']] + path
     return ".".join(path)
 
   def find_variable_member_path(address):
@@ -392,25 +396,38 @@ with open(script_path, "rb") as f:
     #assert(len(variables) == 1)
     members = []
     for variable in variables:
-      path = get_type_member_path(variable[0]['type'], variable[1])
+      path = find_type_member_path(variable[0]['type'], variable[1])
       if path != None:
-        members += [path]
+        #FIXME: Keep path as list, and use proper string join
+        if len(path) == 0:
+          members += [variable[0]['name']]
+        else:
+          members += ["%s.%s" % (variable[0]['name'], path)]
 
     return members
 
+  def find_local_member_path(functions, offset):
+    if len(functions) == 0:
+      return []
+    local = []
+    for function in functions:
+      #FIXME: This assumes the locals are sorted by offset
+      for l in function['locals'][::-1]:
+        if offset >= l['offset']:
+          member_path = find_type_member_path(l['type'], offset - l['offset']) 
+          if member_path != None and len(member_path) > 0:
+            local += ["%s.%s" % (l['name'], member_path)]
+          else:
+            local += [l['name']]
+          break
+    return local
+
+  functions = []
   def decode_operation(f):
+    global functions
     print()
     cursor = f.tell() - HEADER_LENGTH
     print(":label_%d # (0x%X)" % (cursor, cursor))
-
-    if cursor == 0:
-      #FIXME: Maybe we can just sort out functions which are unk4 == 2 ?
-      functions = []
-    else:
-      functions = find_functions_by_address(cursor)
-    if len(functions) > 0:
-      assert(len(functions) == 1)
-      print("LABEL: %s" % str(functions))
       
     operation = read_operation(f)
     #print(final)
@@ -455,19 +472,41 @@ with open(script_path, "rb") as f:
         assert(False)
     elif operation_type == 5:
       if operation['unk1'] == 0:
-        #FIXME: Could we figure out the local? is the stack frame fixed?
-        print("PUSH_FROM_STACK offset %d" % (operation_value[0]))
+        print("PUSH_FROM_STACK offset %d # %s" % (operation_value[0], find_local_member_path(functions, operation_value[0])))
       elif operation['unk1'] == 1:
         variables = find_variable_member_path(operation_value[0])
-        print("PUSH_FROM_VARIABLE address %d # candidate variables %s" % (operation_value[0], str(variables)))
+
+        #FIXME: Clearly attempts to push offset "m_bIsLocked" of an object; not in variable space
+
+        #:label_100808 # (0x189C8)
+        #.unk1 0 # object slot?!
+        #.unk2 19 # source line?
+        #.unk3 4 # source module?
+        #PUSH_STRING value ", m_bIsLocked: %d , m_bKeycard: %d , pickup: %d\n"
+        #
+        #:label_100868 # (0x18A04)
+        #.unk1 1 # object slot?!
+        #.unk2 19 # source line?
+        #.unk3 4 # source module?
+        #PUSH_FROM_VARIABLE address 28 # candidate variables ['g_kSpawnm_bIsRespawning']
+
+        #FIXME: In this case it clearly pushes a variable though:
+
+        #:label_19560 # (0x4C68)
+        #.unk1 1 # object slot?!
+        #.unk2 69 # source line?
+        #.unk3 0 # source module?
+        #PUSH_FROM_VARIABLE address 88 # candidate variables ['PI']
+
+        print("PUSH_FROM_VARIABLE_5.1 address %d # candidate variables %s" % (operation_value[0], str(variables)))
       elif operation['unk1'] == 2:
         print("PUSH_UNKNOWN_5.2 %d" % (operation_value[0]))
       else:
         assert(False)
     elif operation_type == 6:
+      # This seems to pass by reference?!
       if operation['unk1'] == 0:
-        #FIXME: Could we figure out the local? is the stack frame fixed?
-        print("PUSH_FROM_STACK_6.0 offset %d" % (operation_value[0]))
+        print("PUSH_FROM_STACK_6.0 offset %d # %s" % (operation_value[0], find_local_member_path(functions, operation_value[0])))
       elif operation['unk1'] == 1:
         variables = find_variable_member_path(operation_value[0])
         print("PUSH_FROM_VARIABLE_6.1 address %d # candidate variables %s" % (operation_value[0], str(variables)))
@@ -477,29 +516,42 @@ with open(script_path, "rb") as f:
         assert(False)
     elif operation_type == 8:
       # Confirmed
-      float_value = to_float(operation_value)
-      print("PUSH value 0x%08X # float: %f" % (operation_value, float_value))
+      if operation['unk1'] == 0:
+        float_value = to_float(operation_value)
+        print("PUSH value 0x%08X # float: %f" % (operation_value, float_value))
+      else:
+        assert(False)
     elif operation_type == 9:
       # Confirmed
-      print("PUSH_STRING value \"%s\"" % clean_string(operation_value).encode('unicode_escape').decode('utf-8'))
+      if operation['unk1'] == 0:
+        print("PUSH_STRING value \"%s\"" % clean_string(operation_value).encode('unicode_escape').decode('utf-8'))
+      else:
+        assert(False)
     elif operation_type == 11:
       #FIXME: Unsure
       if operation['unk1'] == 0:
-        print("PUSH_FROM_STACK_OR_SOMETHING_11.0 offset %d" % (operation_value[0]))
+        print("POP_TO_STACK_11.0 offset %d # %s" % (operation_value[0], find_local_member_path(functions, operation_value[0])))
       elif operation['unk1'] == 1:
-        print("PUSH_FROM_VARIABLE_OR_SOMETHING_11.1 address %d # Maybe %s" % (operation_value[0], find_variable_member_path(operation_value[0])))
+        print("POP_TO_VARIABLE_11.1 address %d # Maybe %s" % (operation_value[0], find_variable_member_path(operation_value[0])))
       elif operation['unk1'] == 2:
-        print("PUSH_UNKNOWN_OR_SOMETHING_11.2 address %d # Maybe %s" % (operation_value[0], find_variable_member_path(operation_value[0])))
+        print("POP_TO_UNKNOWN_11.2 address %d # Maybe %s" % (operation_value[0], find_variable_member_path(operation_value[0])))
       else:
         assert(False)
     elif operation_type == 15:
-      print("GOTO %s" % get_label(operation_address + operation_value[0] + 8))
+      if operation['unk1'] == 0:
+        print("GOTO %s" % get_label(operation_address + operation_value[0] + 8))
     elif operation_type == 16:
-      # Might be another condition?
-      print("GOTO_IF_TRUE %s" % get_label(operation_address + operation_value[0] + 8))
+      if operation['unk1'] == 0:
+        # Might be another condition?
+        print("GOTO_IF_TRUE %s" % get_label(operation_address + operation_value[0] + 8))
+      else:
+        assert(False)
     elif operation_type == 17:
-      # Might be another condition?
-      print("GOTO_IF_FALSE %s" % get_label(operation_address + operation_value[0] + 8))
+      if operation['unk1'] == 0:
+        # Might be another condition?
+        print("GOTO_IF_FALSE %s" % get_label(operation_address + operation_value[0] + 8))
+      else:
+        assert(False)
     elif operation_type == 18:
       target = operation_address + operation_value[0] + 12
       if operation['unk1'] == 0:
@@ -566,6 +618,7 @@ with open(script_path, "rb") as f:
       if operation['unk1'] == 0:
         print("END_FUNCTION_25.0")
         print("")
+        functions = []
       else:
         assert(False)
 
@@ -574,13 +627,27 @@ with open(script_path, "rb") as f:
       if operation['unk1'] == 0:
         print("END_FUNCTION_26.0 unknown %d" % (operation_value[0]))
         print("")
+        functions = []
       else:
         assert(False)
 
     elif operation_type == 27:
+
       if operation['unk1'] == 0:
+
+        if cursor == 0:
+          #FIXME: Maybe we can just sort out functions which are unk4 == 2 ?
+          functions = []
+        else:
+          functions = find_functions_by_address(cursor)
+        if len(functions) > 0:
+          assert(len(functions) == 1)
+          print("# LABEL: %s" % str(functions))
+
         print("")
         print("BEGIN_FUNCTION stack_size %d extra_stack_size %d" % (operation_value[0], operation_value[1]))
+
+        #FIXME: Dump table of locals
       else:
         assert(False)
 
@@ -641,6 +708,7 @@ with open(script_path, "rb") as f:
     sys.exit(0)
 
   while f.tell() < file_length:
+    #FIXME: add line breaks if there's a change in source-line numbers
     decode_operation(f)
     
 
