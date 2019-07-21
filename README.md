@@ -11,13 +11,36 @@ I was initially going to use Xbox emulation and a debugger, but I quickly decide
 
 ## Existing tools
 
+### Scripts: ful / dbg
+
 The first project was a simple disassembler for the "ful" files (which are scripts).
 I got stuck during development, so I added a parser for "dbg" files (which are debug symbols).
 Eventually that lead to proper "ful" disassembly.
 The disassembly is still hard to read (it's stack based), so I *might* work on an optimizer to make it more readable in the distant future.
 
+### Archives: img
+
 I had originally used [Game Extractor](http://www.watto.org/game_extractor.html) to extract the "ful" and "dbg" files from "img" files, but it's lacking the directory layout.
 Hence, I used the [information on the Xentax Wiki](http://wiki.xentax.com/index.php/Futurama_XBox_IMG) to write my own script for "img" extraction.
+
+### Media: nif
+
+Later, I added support "nif" support, by extending nif.xml for [NifTools (including blender-plugin)](https://github.com/niftools/blender_nif_plugin).
+The [modified nif.xml can be found in my futurama-tools-nifxml repository](https://github.com/JayFoxRox/futurama-tools-nifxml/).
+I quickly gave up on this, because:
+
+* `nifskope` uses nif.xml 0.9 and newer.
+* `blender_nif_plugin` has no full Blender 2.80 support yet, and it was buggy.
+* `pyffi` uses nif.xml 0.7 and older.
+
+`nifskope` is harder to debug and didn't even compile out-of-the-box.
+Meanwhile, `blender_nif_plugin` also didn't work. And while the underlying `pyffi` works, it only supports very old nif.xml.
+`nifskope` also handles these old nif.xml, but it still isn't fully compatible.
+So I wouldn't be able to support both tools at the same time and working on upstream would be an issue due to my old nif.xml base.
+
+If you still want to try the nif support, just run blender using `NIFXMLPATH=$(pwd) blender` from the futurama-tools-nifxml path.
+I made a small tool for inspection, which can be ran using `NIFXMLPATH="$(pwd)" ../futurama-tools/inspect_nif.py FutPAL00/levels/level1-1/stage1.nif`.
+For `nifskope`, just copy the nif.xml from futurama-tools-nifxml, to your `nifskope` path.
 
 ## State of repository
 
