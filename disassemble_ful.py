@@ -376,31 +376,53 @@ with open(script_path, "rb") as f:
         return member #FIXME: Handle case where multiple fields share the same offset
     return None
 
-  def find_type_member_path(type_index, offset):
+  def find_type_member_path(type_index, offset, field=True):
     def search(path, type_index, offset):
+
+      # Skip the fields
+      if not field:
+        if offset == 0:
+          return path
+
       member = find_type_member_by_offset(type_index, offset)
+
+      # Still at an offset, and no more childs exist
       if member == False:
         return False
+
+      # Found exact member, and no more childs exist
       if member == True:
         return path
+
       path += [member]
+
+      # No matching member found
       if member == None:
+        assert(False)
         return path
+
       type_index = member['type']
       offset = offset - member['offset']
-      if offset != 0:
-        return search(path, type_index, offset)
-      else:
-        return path
+      #if offset != 0:
+      return search(path, type_index, offset)
+      #else:
+      #  #FIXME: Keep searching until there's no more sub-members?
+      #  return path
 
     #FIXME: Do most of this in callee?
     path = search([], type_index, offset)
     if path == False:
       return None
+
+    # Alternative to field check above: Only remove final element
+    if False:
+      if not field:
+        path = path[:-1]
+
     path = [x['name'] if x != None else "???" for x in path]
     return ".".join(path)
 
-  def find_variable_member_path(address):
+  def find_variable_member_path(address, field=True):
     variables = find_variable_by_address(address)
     if len(variables) == 0:
       return "variable_%d" % address
@@ -409,7 +431,7 @@ with open(script_path, "rb") as f:
     #assert(len(variables) == 1)
     members = []
     for variable in variables:
-      path = find_type_member_path(variable[0]['type'], variable[1])
+      path = find_type_member_path(variable[0]['type'], variable[1], field)
       if path != None:
         #FIXME: Keep path as list, and use proper string join
         if len(path) == 0:
@@ -419,12 +441,12 @@ with open(script_path, "rb") as f:
 
     return members
 
-  def find_variables_member_path(variables, offset):
+  def find_variables_member_path(variables, offset, field=True):
     local = []
     #FIXME: This assumes the locals are sorted by offset
     for l in variables[::-1]:
       if offset >= l['offset']:
-        member_path = find_type_member_path(l['type'], offset - l['offset']) 
+        member_path = find_type_member_path(l['type'], offset - l['offset'], field) 
         if member_path != None and len(member_path) > 0:
           local += ["%s.%s" % (l['name'], member_path)]
         else:
@@ -432,10 +454,10 @@ with open(script_path, "rb") as f:
         break
     return local
 
-  def find_local_member_path(functions, offset):
+  def find_local_member_path(functions, offset, field=True):
     result = []
     for function in functions:
-      result += find_variables_member_path(function['locals'], offset)
+      result += find_variables_member_path(function['locals'], offset, field)
     return result
 
   functions = []
@@ -445,7 +467,7 @@ with open(script_path, "rb") as f:
     global known_line
 
 
-    def find_function_member_path(offset):
+    def find_function_member_path(offset, field=True):
       if len(functions) != 1:
         return None
 
@@ -458,9 +480,9 @@ with open(script_path, "rb") as f:
         variables = function_type['members']
         function_type_name = function_type['name']
 
-      path = find_variables_member_path(variables, offset)
+      path = find_variables_member_path(variables, offset, field)
 
-      return "%s.%s" % (function_type_name, ".".join(path))
+      return "%s!%s" % (function_type_name, ".".join(path))
        
 
     cursor = f.tell() - HEADER_LENGTH
@@ -492,7 +514,7 @@ with open(script_path, "rb") as f:
         function_type_name = debug_symbols['types'][function['type']]['name']
       else:
         function_type_name = ""
-      return "%s:%s" % (function_type_name, function['name'])
+      return "%s!%s" % (function_type_name, function['name'])
 
     def get_label(address):
 
@@ -533,95 +555,150 @@ with open(script_path, "rb") as f:
       else:
         assert(False)
     elif operation_type == 4:
+
+      # Push "object.field" (object with field) ?
+
       if operation['unk1'] == 0:
-        print("PUSH_FROM_STACK_4.0 offset %d size %d # %s" % (operation_value[0], operation_value[1], find_local_member_path(functions, operation_value[0])))
+        print("PUSH local-field %d size %d # %s" % (operation_value[0], operation_value[1], find_local_member_path(functions, operation_value[0])))
       elif operation['unk1'] == 1:
-        print("PUSH_FROM_VARIABLE_4.1 offset %d size %d # %s" % (operation_value[0], operation_value[1], find_function_member_path(operation_value[0])))
+        print("PUSH class-field %d size %d # %s" % (operation_value[0], operation_value[1], find_function_member_path(operation_value[0])))
       else:
         assert(False)
     elif operation_type == 5:
 
+      # Push "object" (object without field) ?
+
       if operation['unk1'] == 0:
-        print("PUSH_FROM_STACK offset %d # %s" % (operation_value[0], find_local_member_path(functions, operation_value[0])))
+        print("PUSH local %d # %s" % (operation_value[0], find_local_member_path(functions, operation_value[0], False)))
       elif operation['unk1'] == 1:
-        print("PUSH_FROM_VARIABLE_5.1 address %d # %s" % (operation_value[0], find_function_member_path(operation_value[0])))
+        print("PUSH_5 class %d # %s" % (operation_value[0], find_function_member_path(operation_value[0], False)))
       elif operation['unk1'] == 2:
-        print("PUSH_UNKNOWN_5.2 %d # Maybe %s" % (operation_value[0], find_function_member_path(operation_value[0])))
+        print("PUSH global %d # %s" % (operation_value[0], find_variable_member_path(operation_value[0], False)))
       else:
         assert(False)
     elif operation_type == 6:
+
+      # Push "object" (object without field) ?
+
       # This seems to pass by reference?!
       if operation['unk1'] == 0:
-        print("PUSH_STACK_REFERENCE_6.0 offset %d # %s" % (operation_value[0], find_local_member_path(functions, operation_value[0])))
+        print("PUSH &local %d # %s" % (operation_value[0], find_local_member_path(functions, operation_value[0], False)))
       elif operation['unk1'] == 1: 
-        print("PUSH_VARIABLE_REFERENCE_6.1 address %d # %s" % (operation_value[0], find_function_member_path(operation_value[0])))
+        print("PUSH &class %d # %s" % (operation_value[0], find_function_member_path(operation_value[0], False)))
       elif operation['unk1'] == 2:
-        print("PUSH_UNKNOWN_REFERENCE_6.2 %d # Maybe %s" % (operation_value[0], find_function_member_path(operation_value[0])))
+        print("PUSH &global %d # %s" % (operation_value[0], find_variable_member_path(operation_value[0], False)))
       else:
         assert(False)
     elif operation_type == 8:
       # Confirmed
       if operation['unk1'] == 0:
+
+        def probablyFloat(bits):
+          sign = (bits & 0x80000000) != 0;
+          exp = ((bits & 0x7F800000) >> 23) - 127;
+          mant =  bits & 0x007FFFFF;
+
+          # +-0 should be integer
+          if (exp == -127 and mant == 0):
+            return False
+
+          # -1 billionth to +1 billion
+          if (-30 <= exp and exp <= 30):
+            return True
+
+          # Value with only a few binary digits is float
+          if ((mant & 0x0000FFFF) == 0):
+            return True
+
+          return False
+
+        #FIXME: Peek at the next operation. If it's YIELD, then we want float
+
         float_value = to_float(operation_value)
-        print("push integer 0x%08X # float: %f" % (operation_value, float_value))
+        if probablyFloat(operation_value):    
+          #FIXME: Remove trailing zeros
+          #FIXME: Ensure our reacked float is still an exact integer match    
+          print("PUSH float %f # integer: 0x%08X" % (float_value, operation_value))
+        else:
+          print("PUSH integer %d # float: %f" % (operation_value, float_value))
       else:
         assert(False)
     elif operation_type == 9:
       # Confirmed
       if operation['unk1'] == 0:
-        print("push string \"%s\"" % clean_string(operation_value).encode('unicode_escape').decode('utf-8'))
+        print("PUSH string \"%s\"" % clean_string(operation_value).encode('unicode_escape').decode('utf-8').replace("\"", "\\\""))
       else:
         assert(False)
     elif operation_type == 10:
+
+      # Pop "object.field" (object with field)
+
+      #FIXME: Only used to pop function results?
+
       if operation['unk1'] == 0:
-        print("POP_TO_STACK_10.0 offset %d size %d # %s" % (operation_value[0], operation_value[1], find_local_member_path(functions, operation_value[0])))
+        print("POP local-offset %d size %d # %s" % (operation_value[0], operation_value[1], find_local_member_path(functions, operation_value[0])))
       elif operation['unk1'] == 1:
-        print("POP_TO_VARIABLE_10.1 offset %d size %d # %s" % (operation_value[0], operation_value[1], find_function_member_path(operation_value[0])))
+        print("POP class-offset %d size %d # %s" % (operation_value[0], operation_value[1], find_function_member_path(operation_value[0])))
       else:
         assert(False)
     elif operation_type == 11:
+
+      # Pop "object" (object without field)
+
       #FIXME: Unsure
       if operation['unk1'] == 0:
-        print("POP_TO_STACK_11.0 offset %d # %s" % (operation_value[0], find_local_member_path(functions, operation_value[0])))
+        print("POP_11.0 local %d # %s" % (operation_value[0], find_local_member_path(functions, operation_value[0], False)))
       elif operation['unk1'] == 1:
-        print("POP_TO_VARIABLE_11.1 address %d # %s" % (operation_value[0], find_function_member_path(operation_value[0])))
+        print("POP_11.1 class %d # %s" % (operation_value[0], find_function_member_path(operation_value[0], False)))
       elif operation['unk1'] == 2:
-        print("POP_TO_UNKNOWN_11.2 address %d # Maybe %s" % (operation_value[0], find_function_member_path(operation_value[0])))
+        print("POP_11.2 global %d # %s" % (operation_value[0], find_variable_member_path(operation_value[0], False)))
       else:
         assert(False)
     elif operation_type == 12:
+
+      # Pop "object" (object without field)
+
+      # Used in interesting patter like this:
+      #UNKNOWN_MOVE_STACK_12.0 offset 20 size 4 # ['i5']
+      #UNKNOWN_MOVE_STACK_12.0 offset 16 size 4 # ['i4']
+      #UNKNOWN_MOVE_STACK_12.0 offset 12 size 4 # ['i3']
+      #UNKNOWN_MOVE_STACK_12.0 offset 8 size 4 # ['i2']
+      #POP_TO_STACK_11.0 offset 4 # ['i1']
+
       #FIXME: Very unsure
-      if operation['unk1'] == 1:
-        print("UNKNOWN_MOVE_VARIABLE_12.1 offset %d size %d # %s" % (operation_value[0], operation_value[1], find_function_member_path(operation_value[0])))
+      if operation['unk1'] == 0:
+        print("POP local-offset %d size %d # %s" % (operation_value[0], operation_value[1], find_local_member_path(functions, operation_value[0])))
+      elif operation['unk1'] == 1:
+        print("POP class-offset %d size %d # %s" % (operation_value[0], operation_value[1], find_function_member_path(operation_value[0])))
       else:
         assert(False)
     elif operation_type == 14:
       if operation['unk1'] == 0:
         # Probably removes X bytes from stack?
         # Argument is always 4 (at least in level1-1)
-        print("discard size %d" % (operation_value[0]))
+        print("DISCARD size %d" % (operation_value[0]))
       else:
         assert(False)
     elif operation_type == 15:
       if operation['unk1'] == 0:
-        print("goto label %s" % get_label(operation_address + operation_value[0] + 8))
+        print("GOTO label %s" % get_label(operation_address + operation_value[0] + 8))
     elif operation_type == 16:
       if operation['unk1'] == 0:
         # Might be another condition?
-        print("if-false-goto label %s" % get_label(operation_address + operation_value[0] + 8))
+        print("GOTO_IF_FALSE label %s" % get_label(operation_address + operation_value[0] + 8))
       else:
         assert(False)
     elif operation_type == 17:
       if operation['unk1'] == 0:
         # Might be another condition?
-        print("if-true-goto label %s" % get_label(operation_address + operation_value[0] + 8))
+        print("GOTO_IF_TRUE label %s" % get_label(operation_address + operation_value[0] + 8))
       else:
         assert(False)
     elif operation_type == 18:
       target = operation_address + operation_value[0] + 12
       target_function = find_function_by_address(target)
       if operation['unk1'] == 0:
-        print("call label %s stack_size %d # %s" % (get_label(target), operation_value[1], get_function_comment(target_function)))
+        print("CALL_18 label %s stack_size %d # %s" % (get_label(target), operation_value[1], get_function_comment(target_function)))
       else:
         assert(False)
 
@@ -682,32 +759,33 @@ with open(script_path, "rb") as f:
         # Always follows one of these:
         # - PUSH_FROM_VARIABLE_5.1 address 0 # Often: @@AID@@ for all types
         # - PUSH_FROM_VARIABLE_5.1 address 92 # Rarely: @@AID@@ for global type
-        print("UNKNOWN_DEALING_WITH_@@AID@@_21.0")
+        print("UNKNOWN_LOCK_AID_21.0")
       else:
         assert(False)
 
     elif operation_type == 22:
       if operation['unk1'] == 0:
-        print("create-object_22.0")
+        print("CREATE_OBJECT_22.0")
       else:
         assert(False)
 
     elif operation_type == 23:
       if operation['unk1'] == 0:
-        print("destroy-object_23.0")
+        print("DESTROY_OBJECT_23.0")
       else:
         assert(False)
 
     elif operation_type == 24:
       if operation['unk1'] == 0:
         # Takes a float argument on stack
-        print("wait_24.0")
+        print("YIELD")
       else:
         assert(False)
 
     elif operation_type == 25:
       if operation['unk1'] == 0:
-        print("END_FUNCTION_25.0")
+        #FIXME: Not sure what this does, "UNLOCK" is a theory
+        print("END_FUNCTION_UNLOCK_25.0")
         print("")
         functions = []
       else:
@@ -800,6 +878,10 @@ with open(script_path, "rb") as f:
     f.seek(26196)
     f.read(4)
     decode_operation(f)
+
+  if False:
+    print(find_type_member_path(8, 0))
+    sys.exit(0)
 
   if False:
     for x in find_variable_by_address(540):
