@@ -41,13 +41,13 @@ def read_operation(f):
   unk1 = read8(f)
   operation_information['unk1'] = unk1 # Something to do with branching?
   unk2 = read8(f)
-  operation_information['unk2'] = unk2 # Current branch index?
+  operation_information['unk2'] = unk2 # Source line?
   #print(unk1)
   #assert((unk1 == 0x00) or (unk1 == 0x01))
   #print(unk2)
   #assert((unk2 == 0x27) or (unk2 == 0x25))
   unk3 = read8(f)
-  operation_information['unk3'] = unk3
+  operation_information['unk3'] = unk3 # Source file?
   operation_type = read8(f)
   operation_information['type'] = operation_type
 
@@ -66,12 +66,10 @@ def read_operation(f):
     assert(False)  
   
 
-  value = None
-  final = None
   if operation_type == 2:
-    pass
+    value = []
   elif operation_type == 3:
-    pass
+    value = []
   elif operation_type == 4:
     a = read32(f)
     assert(a % 4 == 0)
@@ -103,8 +101,9 @@ def read_operation(f):
     b = read32(f)
     value = [a, b]
   elif operation_type == 14:
-    value = read32(f)
-    assert(value == 4)
+    unk1 = read32(f)
+    assert(unk1 == 4)
+    value = [unk1]
   elif operation_type == 15:
     offset = read32s(f)
     value = [offset]
@@ -183,7 +182,7 @@ def read_function(f):
   address = read32(f)
   function_information['address'] = address
   unk2 = read32(f) # Class type probably
-  #function_information['unk2'] = unk2 #FIXME: Enable, if not used as key
+  function_information['type'] = unk2
   function_index = read32(f)
   unk4 = read32(f)
   function_information['unk4'] = unk4
@@ -298,12 +297,13 @@ if True:
 
 if True:
   for t in debug_symbols['functions']:
-    print("# %s: %s" % (str(t), str(debug_symbols['functions'][t])))
+    function = debug_symbols['functions'][t]
+    print("# %s: %s" % (str(t), str(function)))
 
 with open(script_path, "rb") as f:
 
   print("# Loaded script '%s'" % script_path)
-  print("# ")
+  print("# ")      
 
   # File repeats after half, but with flipped endianess; get second magic
   f.seek(0, os.SEEK_END)
@@ -334,12 +334,21 @@ with open(script_path, "rb") as f:
       comment = ""
     print(".raw 0x%08X # header at offset %d%s" % (value, cursor, comment))
 
+  # Split header and code
+  print()
+
   def find_functions_by_address(address):
     functions = []
     for key in debug_symbols['functions']:
       function = debug_symbols['functions'][key]
-      if function['address'] == address:
-        functions += [function]
+
+      #FIXME: What does this mean? 
+      if function['unk4'] == 2:
+        assert(function['address'] == 0)
+      else:
+
+        if function['address'] == address:
+          functions += [function]
     return functions
 
   def find_variable_by_address(address):
@@ -352,15 +361,19 @@ with open(script_path, "rb") as f:
     return variables
   
   def find_type_member_by_offset(type_index, offset):
-    type_information = debug_symbols['types'][type_index]
-    if len(type_information['members']) == 0:
+    if type_index == 0:
+      members = debug_symbols['variables']
+    else:
+      type_information = debug_symbols['types'][type_index]
+      members = type_information['members']
+    if len(members) == 0:
       if offset == 0:
         return True
       return False
     #FIXME: This assumes the members are sorted by offset
-    for member in type_information['members'][::-1]:
+    for member in members[::-1]:
       if offset >= member['offset']:
-        return member
+        return member #FIXME: Handle case where multiple fields share the same offset
     return None
 
   def find_type_member_path(type_index, offset):
@@ -406,35 +419,80 @@ with open(script_path, "rb") as f:
 
     return members
 
-  def find_local_member_path(functions, offset):
-    if len(functions) == 0:
-      return []
+  def find_variables_member_path(variables, offset):
     local = []
-    for function in functions:
-      #FIXME: This assumes the locals are sorted by offset
-      for l in function['locals'][::-1]:
-        if offset >= l['offset']:
-          member_path = find_type_member_path(l['type'], offset - l['offset']) 
-          if member_path != None and len(member_path) > 0:
-            local += ["%s.%s" % (l['name'], member_path)]
-          else:
-            local += [l['name']]
-          break
+    #FIXME: This assumes the locals are sorted by offset
+    for l in variables[::-1]:
+      if offset >= l['offset']:
+        member_path = find_type_member_path(l['type'], offset - l['offset']) 
+        if member_path != None and len(member_path) > 0:
+          local += ["%s.%s" % (l['name'], member_path)]
+        else:
+          local += [l['name']]
+        break
     return local
 
+  def find_local_member_path(functions, offset):
+    result = []
+    for function in functions:
+      result += find_variables_member_path(function['locals'], offset)
+    return result
+
   functions = []
+  known_line = None
   def decode_operation(f):
     global functions
-    print()
+    global known_line
+
+
+    def find_function_member_path(offset):
+      if len(functions) != 1:
+        return None
+
+      function = functions[0]
+      if function['type'] == 0:
+        variables = debug_symbols['variables']
+        function_type_name = ""
+      else:
+        function_type = debug_symbols['types'][function['type']]
+        variables = function_type['members']
+        function_type_name = function_type['name']
+
+      path = find_variables_member_path(variables, offset)
+
+      return "%s.%s" % (function_type_name, ".".join(path))
+       
+
     cursor = f.tell() - HEADER_LENGTH
-    print(":label_%d # (0x%X)" % (cursor, cursor))
       
     operation = read_operation(f)
-    #print(final)
     #print(operation)
+
+    #FIXME: Also respect the source module?
+    # Try to add line breaks, whenever the source line changed
+    line = (operation['unk2'], operation['unk3'])
+    if known_line != line:
+      if known_line != None:
+        print()
+      known_line = line
+      print(".line %d %d # source line / module?" % (operation['unk2'], operation['unk3']))
+
+    print(":label_%d # (0x%X)" % (cursor, cursor))
 
     def to_float(i):
       return struct.unpack("<f", struct.pack("<I", i))[0]
+
+    def find_function_by_address(address):
+      functions = find_functions_by_address(address)
+      assert(len(functions) == 1)
+      return functions[0]
+
+    def get_function_comment(function):
+      if function['type'] != 0:
+        function_type_name = debug_symbols['types'][function['type']]['name']
+      else:
+        function_type_name = ""
+      return "%s:%s" % (function_type_name, function['name'])
 
     def get_label(address):
 
@@ -460,71 +518,65 @@ with open(script_path, "rb") as f:
     operation_address = operation['address']
     operation_type = operation['type']
     operation_value = operation['value']
-    print(".unk1 %d # object slot?!" % operation['unk1'])
-    print(".unk2 %d # source line?" % operation['unk2'])
-    print(".unk3 %d # source module?" % operation['unk3'])
-    if operation_type == 4:
+    if operation_type == 2:
       if operation['unk1'] == 0:
-        print("COPY_TO_STACK_4.0 unknown %d stack_size %d" % (operation_value[0], operation_value[1]))
+        # This function seems to set condition flags / produces conditions
+        # It checks wether the time from he 
+        print("CHECK_COUNTDOWN_2.0")
+      else:
+        assert(False)
+    elif operation_type == 3:
+      if operation['unk1'] == 0:
+        # Takes one float value
+        # It seems to return immediately, but starts measuring time
+        print("SET_COUNTDOWN_3.0")
+      else:
+        assert(False)
+    elif operation_type == 4:
+      if operation['unk1'] == 0:
+        print("PUSH_FROM_STACK_4.0 offset %d size %d # %s" % (operation_value[0], operation_value[1], find_local_member_path(functions, operation_value[0])))
       elif operation['unk1'] == 1:
-        print("COPY_TO_STACK_4.1 unknown %d stack_size %d" % (operation_value[0], operation_value[1]))
+        print("PUSH_FROM_VARIABLE_4.1 offset %d size %d # %s" % (operation_value[0], operation_value[1], find_function_member_path(operation_value[0])))
       else:
         assert(False)
     elif operation_type == 5:
+
       if operation['unk1'] == 0:
         print("PUSH_FROM_STACK offset %d # %s" % (operation_value[0], find_local_member_path(functions, operation_value[0])))
       elif operation['unk1'] == 1:
-        variables = find_variable_member_path(operation_value[0])
-
-        #FIXME: Clearly attempts to push offset "m_bIsLocked" of an object; not in variable space
-
-        #:label_100808 # (0x189C8)
-        #.unk1 0 # object slot?!
-        #.unk2 19 # source line?
-        #.unk3 4 # source module?
-        #PUSH_STRING value ", m_bIsLocked: %d , m_bKeycard: %d , pickup: %d\n"
-        #
-        #:label_100868 # (0x18A04)
-        #.unk1 1 # object slot?!
-        #.unk2 19 # source line?
-        #.unk3 4 # source module?
-        #PUSH_FROM_VARIABLE address 28 # candidate variables ['g_kSpawnm_bIsRespawning']
-
-        #FIXME: In this case it clearly pushes a variable though:
-
-        #:label_19560 # (0x4C68)
-        #.unk1 1 # object slot?!
-        #.unk2 69 # source line?
-        #.unk3 0 # source module?
-        #PUSH_FROM_VARIABLE address 88 # candidate variables ['PI']
-
-        print("PUSH_FROM_VARIABLE_5.1 address %d # candidate variables %s" % (operation_value[0], str(variables)))
+        print("PUSH_FROM_VARIABLE_5.1 address %d # %s" % (operation_value[0], find_function_member_path(operation_value[0])))
       elif operation['unk1'] == 2:
-        print("PUSH_UNKNOWN_5.2 %d" % (operation_value[0]))
+        print("PUSH_UNKNOWN_5.2 %d # Maybe %s" % (operation_value[0], find_function_member_path(operation_value[0])))
       else:
         assert(False)
     elif operation_type == 6:
       # This seems to pass by reference?!
       if operation['unk1'] == 0:
-        print("PUSH_FROM_STACK_6.0 offset %d # %s" % (operation_value[0], find_local_member_path(functions, operation_value[0])))
-      elif operation['unk1'] == 1:
-        variables = find_variable_member_path(operation_value[0])
-        print("PUSH_FROM_VARIABLE_6.1 address %d # candidate variables %s" % (operation_value[0], str(variables)))
+        print("PUSH_STACK_REFERENCE_6.0 offset %d # %s" % (operation_value[0], find_local_member_path(functions, operation_value[0])))
+      elif operation['unk1'] == 1: 
+        print("PUSH_VARIABLE_REFERENCE_6.1 address %d # %s" % (operation_value[0], find_function_member_path(operation_value[0])))
       elif operation['unk1'] == 2:
-        print("PUSH_UNKNOWN_6.2 %d" % (operation_value[0]))
+        print("PUSH_UNKNOWN_REFERENCE_6.2 %d # Maybe %s" % (operation_value[0], find_function_member_path(operation_value[0])))
       else:
         assert(False)
     elif operation_type == 8:
       # Confirmed
       if operation['unk1'] == 0:
         float_value = to_float(operation_value)
-        print("PUSH value 0x%08X # float: %f" % (operation_value, float_value))
+        print("push integer 0x%08X # float: %f" % (operation_value, float_value))
       else:
         assert(False)
     elif operation_type == 9:
       # Confirmed
       if operation['unk1'] == 0:
-        print("PUSH_STRING value \"%s\"" % clean_string(operation_value).encode('unicode_escape').decode('utf-8'))
+        print("push string \"%s\"" % clean_string(operation_value).encode('unicode_escape').decode('utf-8'))
+      else:
+        assert(False)
+    elif operation_type == 10:
+      if operation['unk1'] == 0:
+        print("POP_TO_STACK_10.0 offset %d size %d # %s" % (operation_value[0], operation_value[1], find_local_member_path(functions, operation_value[0])))
+      elif operation['unk1'] == 1:
+        print("POP_TO_VARIABLE_10.1 offset %d size %d # %s" % (operation_value[0], operation_value[1], find_function_member_path(operation_value[0])))
       else:
         assert(False)
     elif operation_type == 11:
@@ -532,30 +584,44 @@ with open(script_path, "rb") as f:
       if operation['unk1'] == 0:
         print("POP_TO_STACK_11.0 offset %d # %s" % (operation_value[0], find_local_member_path(functions, operation_value[0])))
       elif operation['unk1'] == 1:
-        print("POP_TO_VARIABLE_11.1 address %d # Maybe %s" % (operation_value[0], find_variable_member_path(operation_value[0])))
+        print("POP_TO_VARIABLE_11.1 address %d # %s" % (operation_value[0], find_function_member_path(operation_value[0])))
       elif operation['unk1'] == 2:
-        print("POP_TO_UNKNOWN_11.2 address %d # Maybe %s" % (operation_value[0], find_variable_member_path(operation_value[0])))
+        print("POP_TO_UNKNOWN_11.2 address %d # Maybe %s" % (operation_value[0], find_function_member_path(operation_value[0])))
+      else:
+        assert(False)
+    elif operation_type == 12:
+      #FIXME: Very unsure
+      if operation['unk1'] == 1:
+        print("UNKNOWN_MOVE_VARIABLE_12.1 offset %d size %d # %s" % (operation_value[0], operation_value[1], find_function_member_path(operation_value[0])))
+      else:
+        assert(False)
+    elif operation_type == 14:
+      if operation['unk1'] == 0:
+        # Probably removes X bytes from stack?
+        # Argument is always 4 (at least in level1-1)
+        print("discard size %d" % (operation_value[0]))
       else:
         assert(False)
     elif operation_type == 15:
       if operation['unk1'] == 0:
-        print("GOTO %s" % get_label(operation_address + operation_value[0] + 8))
+        print("goto label %s" % get_label(operation_address + operation_value[0] + 8))
     elif operation_type == 16:
       if operation['unk1'] == 0:
         # Might be another condition?
-        print("GOTO_IF_TRUE %s" % get_label(operation_address + operation_value[0] + 8))
+        print("if-false-goto label %s" % get_label(operation_address + operation_value[0] + 8))
       else:
         assert(False)
     elif operation_type == 17:
       if operation['unk1'] == 0:
         # Might be another condition?
-        print("GOTO_IF_FALSE %s" % get_label(operation_address + operation_value[0] + 8))
+        print("if-true-goto label %s" % get_label(operation_address + operation_value[0] + 8))
       else:
         assert(False)
     elif operation_type == 18:
       target = operation_address + operation_value[0] + 12
+      target_function = find_function_by_address(target)
       if operation['unk1'] == 0:
-        print("CALL_18.0 %s stack_size %d" % (get_label(target), operation_value[1]))
+        print("call label %s stack_size %d # %s" % (get_label(target), operation_value[1], get_function_comment(target_function)))
       else:
         assert(False)
 
@@ -575,33 +641,30 @@ with open(script_path, "rb") as f:
 
     elif operation_type == 19:
       # Confirmed
-      class_index = operation_value[0]
-      function_index = operation_value[1]
 
-      key = tuple([class_index, function_index])
-      if key in debug_symbols['functions']:
-        function_address = debug_symbols['functions'][key]['address']
-        function_name = debug_symbols['functions'][key]['name']
-        if function_address != 0:
-          function_address = " at label_%d"
-        else:
-          function_address = ""
-      else:
-        function_name = "*%d" % class_index 
-        function_address = ""
+      if operation['unk1'] == 0:
+        class_index = operation_value[0]
+        function_index = operation_value[1]
+        function = debug_symbols['functions'][(class_index, function_index)]
+        comment = get_function_comment(function)
 
-      if class_index == 0:
-        class_name = "global "
-      elif class_index in debug_symbols['types']:
-        class_name = "class %s " % debug_symbols['types'][class_index]['name']
+        print("CALL class %d function %d # %s" % (class_index, function_index, comment))
       else:
-        class_name = "unknown "
-        
-      print("CALL_METHOD class %d function %d # %s%s%s" % (class_index, function_index, class_name, function_name, function_address))
+        assert(False)
+
     elif operation_type == 20:
       target = operation_address + operation_value[0] + 16
+      target_function = find_function_by_address(target)
       if operation['unk1'] == 0:
-        print("CALL_20.0 %s stack_size %d unknown %d # %s" % (get_label(target), operation_value[1], operation_value[2], find_variable_member_path(operation_value[2])))
+
+        if False:
+          print()
+          for y in debug_symbols['types']:
+            print(y)
+            x = find_type_member_path(y, operation_value[2])
+            print("--- type %s: %s" % (debug_symbols['types'][y]['name'], x))
+
+        print("CALL_20.0 label %s stack_size %d unknown %d # %s" % (get_label(target), operation_value[1], operation_value[2], get_function_comment(target_function)))
       else:
         assert(False)
 
@@ -614,6 +677,34 @@ with open(script_path, "rb") as f:
         assert(operation['type'] == 27)
         f.seek(off)
 
+    elif operation_type == 21:
+      if operation['unk1'] == 0:
+        # Always follows one of these:
+        # - PUSH_FROM_VARIABLE_5.1 address 0 # Often: @@AID@@ for all types
+        # - PUSH_FROM_VARIABLE_5.1 address 92 # Rarely: @@AID@@ for global type
+        print("UNKNOWN_DEALING_WITH_@@AID@@_21.0")
+      else:
+        assert(False)
+
+    elif operation_type == 22:
+      if operation['unk1'] == 0:
+        print("create-object_22.0")
+      else:
+        assert(False)
+
+    elif operation_type == 23:
+      if operation['unk1'] == 0:
+        print("destroy-object_23.0")
+      else:
+        assert(False)
+
+    elif operation_type == 24:
+      if operation['unk1'] == 0:
+        # Takes a float argument on stack
+        print("wait_24.0")
+      else:
+        assert(False)
+
     elif operation_type == 25:
       if operation['unk1'] == 0:
         print("END_FUNCTION_25.0")
@@ -625,7 +716,7 @@ with open(script_path, "rb") as f:
 
     elif operation_type == 26:
       if operation['unk1'] == 0:
-        print("END_FUNCTION_26.0 unknown %d" % (operation_value[0]))
+        print("END_FUNCTION_26.0 stack_size %d" % (operation_value[0]))
         print("")
         functions = []
       else:
@@ -635,24 +726,35 @@ with open(script_path, "rb") as f:
 
       if operation['unk1'] == 0:
 
-        if cursor == 0:
-          #FIXME: Maybe we can just sort out functions which are unk4 == 2 ?
-          functions = []
-        else:
-          functions = find_functions_by_address(cursor)
+        print("")
+
+        functions = find_functions_by_address(cursor)
         if len(functions) > 0:
           assert(len(functions) == 1)
           print("# LABEL: %s" % str(functions))
 
-        print("")
         print("BEGIN_FUNCTION stack_size %d extra_stack_size %d" % (operation_value[0], operation_value[1]))
 
-        #FIXME: Dump table of locals
+        # Dump table of locals
+        if len(functions) == 1:
+          function = functions[0]
+          function_type = function['type']
+          if function_type != 0:
+            print(".class %s" % debug_symbols['types'][function_type]['name'])
+          local = function['locals']
+          if len(local) > 0:
+            #FIXME: Add empty line here?
+            for l in local:
+              #FIXME: Add dummy locals for alignment if necessary
+              type_name = debug_symbols['types'][l['type']]['name']
+              print(".local %s %s # Offset %d" % (type_name, l['name'], l['offset']))
+
       else:
         assert(False)
 
     else:
-      print("UNKNOWN_%d %s" % (operation_type, str(operation_value)))
+      print("UNKNOWN_%d.%d %s" % (operation_type, operation['unk1'], str(operation_value)))
+      assert(False)
 
   if False:
     f.seek(432)
