@@ -775,7 +775,11 @@ with open(script_path, "rb") as f:
             x = find_type_member_path(y, operation_value[2])
             print("--- type %s: %s" % (debug_symbols['types'][y]['name'], x))
 
-        print("CALL_20.0 label %s stack_size %d unknown %d # %s" % (get_label(target), operation_value[1], operation_value[2], get_function_comment(target_function)))
+          a = None #find_local_member_path(functions, operation_value[2], True)
+          b = find_function_member_path(operation_value[2], True)
+          c = find_variable_member_path(operation_value[2], True)
+
+        print("CREATE_THREAD_20.0 label %s stack_size %d unknown %d # %s" % (get_label(target), operation_value[1], operation_value[2], get_function_comment(target_function)))
       else:
         assert(False)
 
