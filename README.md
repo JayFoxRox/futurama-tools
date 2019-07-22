@@ -42,9 +42,14 @@ If you still want to try the nif support, just run blender using `NIFXMLPATH=$(p
 I made a small tool for inspection, which can be ran using `NIFXMLPATH="$(pwd)" ../futurama-tools/inspect_nif.py FutPAL00/levels/level1-1/stage1.nif`.
 For `nifskope`, just copy the nif.xml from futurama-tools-nifxml, to your `nifskope` path.
 
-### Language files: ldb
+### Translations: ldb
 
 I added support for "ldb" files, so I could understand the mission plot more easily.
+
+### Fonts: fnt
+
+I also added support for "fnt" files for completeness.
+The "fonts/latin1_xbox.fnt" shipped with the game appears to be broken.
 
 ## State of repository
 
