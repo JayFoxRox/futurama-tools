@@ -350,7 +350,7 @@ with open(script_path, "rb") as f:
 
     comments = {
       4: "Always 0x0000012C",
-      8: "Always 0x00001A0A",
+      8: "Always 0x00001A0A (Original Xbox) / 0x00001401 (PlayStation 2)",
       12: "Variable space size",
       20: "Always 0x00000000",
       24: "Always 0x00000000",
@@ -557,7 +557,7 @@ with open(script_path, "rb") as f:
       return "%s%s" % (function_type_name, function['name'])
 
     def get_label(address):
-      return labels[address]
+      return ":%s" % labels[address]
 
     def find_type_members_by_offset(offset):
       members = []
@@ -592,7 +592,7 @@ with open(script_path, "rb") as f:
       if operation['unk1'] == 0:
         print("PUSH local-field %d size %d # %s" % (operation_value[0], operation_value[1], find_local_member_path(functions, operation_value[0])))
       elif operation['unk1'] == 1:
-        print("PUSH class-field %d size %d # %s" % (operation_value[0], operation_value[1], find_function_member_path(operation_value[0])))
+        print("PUSH this-field %d size %d # %s" % (operation_value[0], operation_value[1], find_function_member_path(operation_value[0])))
       else:
         assert(False)
     elif operation_type == 5:
@@ -603,7 +603,7 @@ with open(script_path, "rb") as f:
       if operation['unk1'] == 0:
         print("PUSH_5 local %d # %s" % (operation_value[0], find_local_member_path(functions, operation_value[0], True)))
       elif operation['unk1'] == 1:
-        print("PUSH_5 class %d # %s" % (operation_value[0], find_function_member_path(operation_value[0], True)))
+        print("PUSH_5 this %d # %s" % (operation_value[0], find_function_member_path(operation_value[0], True)))
       elif operation['unk1'] == 2:
         print("PUSH global %d # %s" % (operation_value[0], find_variable_member_path(operation_value[0], True)))
       else:
@@ -614,11 +614,11 @@ with open(script_path, "rb") as f:
 
       # This seems to pass by reference?!
       if operation['unk1'] == 0:
-        print("PUSH &local %d # %s" % (operation_value[0], find_local_member_path(functions, operation_value[0], False)))
+        print("PUSH local* %d # %s" % (operation_value[0], find_local_member_path(functions, operation_value[0], False)))
       elif operation['unk1'] == 1: 
-        print("PUSH &class %d # %s" % (operation_value[0], find_function_member_path(operation_value[0], False)))
+        print("PUSH this* %d # %s" % (operation_value[0], find_function_member_path(operation_value[0], False)))
       elif operation['unk1'] == 2:
-        print("PUSH &global %d # %s" % (operation_value[0], find_variable_member_path(operation_value[0], False)))
+        print("PUSH global* %d # %s" % (operation_value[0], find_variable_member_path(operation_value[0], False)))
       else:
         assert(False)
     elif operation_type == 8:
@@ -671,7 +671,7 @@ with open(script_path, "rb") as f:
       if operation['unk1'] == 0:
         print("POP local-offset %d size %d # %s" % (operation_value[0], operation_value[1], find_local_member_path(functions, operation_value[0])))
       elif operation['unk1'] == 1:
-        print("POP class-offset %d size %d # %s" % (operation_value[0], operation_value[1], find_function_member_path(operation_value[0])))
+        print("POP this-offset %d size %d # %s" % (operation_value[0], operation_value[1], find_function_member_path(operation_value[0])))
       else:
         assert(False)
     elif operation_type == 11:
@@ -683,7 +683,7 @@ with open(script_path, "rb") as f:
       if operation['unk1'] == 0:
         print("POP_11.0 local %d # %s" % (operation_value[0], find_local_member_path(functions, operation_value[0], True)))
       elif operation['unk1'] == 1:
-        print("POP_11.1 class %d # %s" % (operation_value[0], find_function_member_path(operation_value[0], True)))
+        print("POP_11.1 this %d # %s" % (operation_value[0], find_function_member_path(operation_value[0], True)))
       elif operation['unk1'] == 2:
         print("POP_11.2 global %d # %s" % (operation_value[0], find_variable_member_path(operation_value[0], True)))
       else:
@@ -703,7 +703,7 @@ with open(script_path, "rb") as f:
       if operation['unk1'] == 0:
         print("POP local-offset %d size %d # %s" % (operation_value[0], operation_value[1], find_local_member_path(functions, operation_value[0])))
       elif operation['unk1'] == 1:
-        print("POP class-offset %d size %d # %s" % (operation_value[0], operation_value[1], find_function_member_path(operation_value[0])))
+        print("POP this-offset %d size %d # %s" % (operation_value[0], operation_value[1], find_function_member_path(operation_value[0])))
       else:
         assert(False)
     elif operation_type == 14:
