@@ -42,6 +42,10 @@ If you still want to try the nif support, just run blender using `NIFXMLPATH=$(p
 I made a small tool for inspection, which can be ran using `NIFXMLPATH="$(pwd)" ../futurama-tools/inspect_nif.py FutPAL00/levels/level1-1/stage1.nif`.
 For `nifskope`, just copy the nif.xml from futurama-tools-nifxml, to your `nifskope` path.
 
+### Language files: ldb
+
+I added support for "ldb" files, so I could understand the mission plot more easily.
+
 ## State of repository
 
 The tools are very incomplete and not very functional.
