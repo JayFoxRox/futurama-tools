@@ -36,7 +36,9 @@ def read_operation(f):
   
   operation_information = {}
 
-  operation_information['address'] = f.tell() - HEADER_LENGTH
+  address = f.tell() - HEADER_LENGTH
+
+  operation_information['address'] = address
 
   unk1 = read8(f)
   operation_information['unk1'] = unk1 # Something to do with branching?
@@ -106,31 +108,36 @@ def read_operation(f):
     value = [unk1]
   elif operation_type == 15:
     offset = read32s(f)
-    value = [offset]
+    target = address + offset + 8
+    value = [target]
   elif operation_type == 16:
     offset = read32s(f)
-    value = [offset]
+    target = address + offset + 8
+    value = [target]
   elif operation_type == 17:
     offset = read32s(f)
-    value = [offset]
+    target = address + offset + 8
+    value = [target]
   elif operation_type == 18:
     offset = read32s(f)
+    target = address + offset + 12
     b = read32s(f) # Stack size?
     assert(b % 4 == 0)
-    value = [offset, b]
+    value = [target, b]
   elif operation_type == 19:
     class_index = read32(f) # Class
     function_index = read32(f) # Function index
     value = [class_index, function_index]
   elif operation_type == 20:
     offset = read32s(f)
+    target = address + offset + 16
 
     a = read32(f) # ???
     assert(a % 4 == 0)
     b = read32(f) # ???
     assert(b % 4 == 0)
 
-    value = [offset, a, b]
+    value = [target, a, b]
   elif operation_type == 21:
     value = []
   elif operation_type == 22:
@@ -198,7 +205,25 @@ def read_function(f):
 
   #print(function_information)
   assert((unk4 == 1) or (unk4 == 2) or (unk4 == 17) or (unk4 == 33) or (unk4 == 129) or (unk4 == 385))
-
+  if unk4 & 1: # Debug symbols available?
+    assert(path != "")
+  if unk4 & 2:
+    #FIXME: Linked from library? No debug symbols?
+    #assert(unk2 == 0) # type = 0
+    assert(address == 0)
+  if unk4 & 16:
+    # Constructor (CREATE_OBJECT)
+    #print(name, file=sys.stderr)
+    pass
+  if unk4 & 32:
+    # Destructor (DESTROY_OBJECT)
+    #print(name, file=sys.stderr)
+    assert(name == "Die" or name == "@@Destruct@@" or "ExitPoint")
+  if unk4 & 128:
+    # Locked (UNKNOWN_LOCK_AID_21 / END_FUNCTION_UNLOCK_25)
+    pass
+  if unk4 & 256:
+    assert(name[0:10] == "@@action@@")
   return next_function, (unk2, function_index), function_information
 
 def read_type(f):
@@ -292,8 +317,10 @@ if True:
     print("# %d: %s" % (t, str(debug_symbols['types'][t])))
 
 if True:
+  print()
   for v in debug_symbols['variables']:
-    print("# var: %s" % str(v))
+    print(".global %s %s # Offset %d" % (debug_symbols['types'][v['type']]['name'], v['name'], v['offset']))
+  print()
 
 if True:
   for t in debug_symbols['functions']:
@@ -322,8 +349,14 @@ with open(script_path, "rb") as f:
   for i in range((HEADER_LENGTH - 4) // 4):
 
     comments = {
+      4: "Always 0x0000012C",
+      8: "Always 0x00001A0A",
       12: "Variable space size",
-      32: "ExitPoint address"
+      20: "Always 0x00000000",
+      24: "Always 0x00000000",
+      28: "Always 0x00000000",
+      32: "ExitPoint address",
+      36: "Always 0x00000000"
     }
 
     cursor = f.tell()
@@ -334,8 +367,27 @@ with open(script_path, "rb") as f:
       comment = ""
     print(".raw 0x%08X # header at offset %d%s" % (value, cursor, comment))
 
+  # Read code to storage
+  operations = {}
+  while f.tell() < file_length:
+    #FIXME: add line breaks if there's a change in source-line numbers
+    address = f.tell() - HEADER_LENGTH
+    operations[address] = read_operation(f)
+
+  # Collect all necessary labels
+  labels = {}
+  for address in operations:
+    branch_types = [
+      15, 16, 17, 18, 20
+    ]
+    operation = operations[address]    
+    if operation['type'] in branch_types:
+      target = operation['value'][0]
+      labels[target] = "label_%d" % target
+
   # Split header and code
   print()
+
 
   def find_functions_by_address(address):
     functions = []
@@ -458,13 +510,12 @@ with open(script_path, "rb") as f:
     result = []
     for function in functions:
       result += find_variables_member_path(function['locals'], offset, field)
-    return result
+    assert(len(result) == 1)
+    return result[0]
 
   functions = []
-  known_line = None
-  def decode_operation(f):
+  def print_operation(address):
     global functions
-    global known_line
 
 
     def find_function_member_path(offset, field=True):
@@ -478,28 +529,17 @@ with open(script_path, "rb") as f:
       else:
         function_type = debug_symbols['types'][function['type']]
         variables = function_type['members']
-        function_type_name = function_type['name']
+        function_type_name = "%s." % function_type['name']
 
       path = find_variables_member_path(variables, offset, field)
 
-      return "%s!%s" % (function_type_name, ".".join(path))
+      return "%s%s" % (function_type_name, ".".join(path))
        
-
-    cursor = f.tell() - HEADER_LENGTH
-      
-    operation = read_operation(f)
+    #FIXME: Remove
+    cursor = address
+    
+    operation = operations[address]
     #print(operation)
-
-    #FIXME: Also respect the source module?
-    # Try to add line breaks, whenever the source line changed
-    line = (operation['unk2'], operation['unk3'])
-    if known_line != line:
-      if known_line != None:
-        print()
-      known_line = line
-      print(".line %d %d # source line / module?" % (operation['unk2'], operation['unk3']))
-
-    print(":label_%d # (0x%X)" % (cursor, cursor))
 
     def to_float(i):
       return struct.unpack("<f", struct.pack("<I", i))[0]
@@ -511,22 +551,13 @@ with open(script_path, "rb") as f:
 
     def get_function_comment(function):
       if function['type'] != 0:
-        function_type_name = debug_symbols['types'][function['type']]['name']
+        function_type_name = "%s." % debug_symbols['types'][function['type']]['name']
       else:
         function_type_name = ""
-      return "%s!%s" % (function_type_name, function['name'])
+      return "%s%s" % (function_type_name, function['name'])
 
     def get_label(address):
-
-      # Ensure target exists
-      if True:
-        off = f.tell()
-        f.seek(HEADER_LENGTH + address)
-        operation = read_operation(f)
-        #print(operation)
-        f.seek(off)
-
-      return "label_%d" % address
+      return labels[address]
 
     def find_type_members_by_offset(offset):
       members = []
@@ -567,13 +598,14 @@ with open(script_path, "rb") as f:
     elif operation_type == 5:
 
       # Push "object" (object without field) ?
+      #FIXME: Maybe some "push base type" instead? Otherwise it would remove some smart stuff
 
       if operation['unk1'] == 0:
-        print("PUSH local %d # %s" % (operation_value[0], find_local_member_path(functions, operation_value[0], False)))
+        print("PUSH_5 local %d # %s" % (operation_value[0], find_local_member_path(functions, operation_value[0], True)))
       elif operation['unk1'] == 1:
-        print("PUSH_5 class %d # %s" % (operation_value[0], find_function_member_path(operation_value[0], False)))
+        print("PUSH_5 class %d # %s" % (operation_value[0], find_function_member_path(operation_value[0], True)))
       elif operation['unk1'] == 2:
-        print("PUSH global %d # %s" % (operation_value[0], find_variable_member_path(operation_value[0], False)))
+        print("PUSH global %d # %s" % (operation_value[0], find_variable_member_path(operation_value[0], True)))
       else:
         assert(False)
     elif operation_type == 6:
@@ -613,6 +645,7 @@ with open(script_path, "rb") as f:
           return False
 
         #FIXME: Peek at the next operation. If it's YIELD, then we want float
+        #FIXME: Possibly even optimize something like `push 1, operator(bool)` (PUSH boolean True)
 
         float_value = to_float(operation_value)
         if probablyFloat(operation_value):    
@@ -644,14 +677,15 @@ with open(script_path, "rb") as f:
     elif operation_type == 11:
 
       # Pop "object" (object without field)
+      #FIXME: Maybe some "pop base type" instead? Otherwise it would remove some smart stuff
 
       #FIXME: Unsure
       if operation['unk1'] == 0:
-        print("POP_11.0 local %d # %s" % (operation_value[0], find_local_member_path(functions, operation_value[0], False)))
+        print("POP_11.0 local %d # %s" % (operation_value[0], find_local_member_path(functions, operation_value[0], True)))
       elif operation['unk1'] == 1:
-        print("POP_11.1 class %d # %s" % (operation_value[0], find_function_member_path(operation_value[0], False)))
+        print("POP_11.1 class %d # %s" % (operation_value[0], find_function_member_path(operation_value[0], True)))
       elif operation['unk1'] == 2:
-        print("POP_11.2 global %d # %s" % (operation_value[0], find_variable_member_path(operation_value[0], False)))
+        print("POP_11.2 global %d # %s" % (operation_value[0], find_variable_member_path(operation_value[0], True)))
       else:
         assert(False)
     elif operation_type == 12:
@@ -681,21 +715,21 @@ with open(script_path, "rb") as f:
         assert(False)
     elif operation_type == 15:
       if operation['unk1'] == 0:
-        print("GOTO label %s" % get_label(operation_address + operation_value[0] + 8))
+        print("GOTO label %s" % get_label(operation_value[0]))
     elif operation_type == 16:
       if operation['unk1'] == 0:
         # Might be another condition?
-        print("GOTO_IF_FALSE label %s" % get_label(operation_address + operation_value[0] + 8))
+        print("GOTO_IF_FALSE label %s" % get_label(operation_value[0]))
       else:
         assert(False)
     elif operation_type == 17:
       if operation['unk1'] == 0:
         # Might be another condition?
-        print("GOTO_IF_TRUE label %s" % get_label(operation_address + operation_value[0] + 8))
+        print("GOTO_IF_TRUE label %s" % get_label(operation_value[0]))
       else:
         assert(False)
     elif operation_type == 18:
-      target = operation_address + operation_value[0] + 12
+      target = operation_value[0]
       target_function = find_function_by_address(target)
       if operation['unk1'] == 0:
         print("CALL_18 label %s stack_size %d # %s" % (get_label(target), operation_value[1], get_function_comment(target_function)))
@@ -730,7 +764,7 @@ with open(script_path, "rb") as f:
         assert(False)
 
     elif operation_type == 20:
-      target = operation_address + operation_value[0] + 16
+      target = operation_value[0]
       target_function = find_function_by_address(target)
       if operation['unk1'] == 0:
 
@@ -891,9 +925,26 @@ with open(script_path, "rb") as f:
       print(x)
     sys.exit(0)
 
-  while f.tell() < file_length:
-    #FIXME: add line breaks if there's a change in source-line numbers
-    decode_operation(f)
+  # Actually print all operations
+  known_line = None
+  for address in operations:
     
+    operation = operations[address]
 
+    # Try to add line breaks, whenever the source line changed
+    line = (operation['unk2'], operation['unk3'])
+    if known_line != line:
+      if known_line != None:
+        print()
+      known_line = line
+      #FIXME: This should be an option
+      if True:
+        #FIXME: Not 100% sure about the second value
+        print(".line %d %d" % (operation['unk2'], operation['unk3']))
 
+    # Emit label if necessary
+    if address in labels:
+      print(":%s # (%d)" % (labels[address], address))
+
+    #FIXME: Pass an operation struct directly?
+    print_operation(address)
