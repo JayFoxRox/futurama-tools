@@ -46,18 +46,37 @@ with open(file_path, "rb") as f:
       f.read(1)
 
   root_directory_size = read32(f)
-  root_directory_end = f.tell() + root_directory_size - 7
-  print("Root directory is %d bytes" % root_directory_size)
-  print(root_directory_end)
 
+  # The lower 3 bits might reveal platform?
+  platform = root_directory_size & 3
+  root_directory_size = root_directory_size & ~3
+
+  # Output platform info
+  if platform == 0:
+    print("Assuming platform: PlayStation 2")
+  elif platform == 3:
+    print("Assuming platform: Original Xbox")
+  else:
+    print("Unknown platform %d" % platform)
+
+  # Separate mainloop from header
+  print()
+
+  # Tell user what size this is
+  #FIXME: This could re-use code that also exists below
+  root_directory_end = f.tell() + root_directory_size - 4
+  print("/: Directory (size %d)" % root_directory_size)
+
+  # Loop over all entries
   path = []
   while f.tell() < root_directory_end:
 
-    print()
-    print(f.tell())
-    print(path)
+    #print()
+    #print(f.tell())
+    #print(path)
 
     entry_name = parse_string(f)
+    assert(len(entry_name) > 0)
     align(f, 4)
 
     is_folder = entry_name[0] & 0x80
@@ -65,28 +84,39 @@ with open(file_path, "rb") as f:
       entry_name = bytes([entry_name[0] ^ 0x80]) + entry_name[1:]
     entry_name = entry_name.decode('ascii')
 
-    usable_path = [x[0] for x in path]
-    system_path = os.path.join(base_path, *usable_path, entry_name)
+    # Construct relative path within image
+    entry_directory_list = [x[0] for x in path]
+    entry_path = "/".join(entry_directory_list + [entry_name])
+
+    # Create a path for he host file system
+    system_path = os.path.join(base_path, *entry_directory_list, entry_name)
+
+    # Read entry size
+    entry_size = read32(f)
 
     if is_folder:
       # Read a directory
-      directory_size = read32(f)
-      print("Directory %d" % directory_size)
+      assert(entry_size % 4 == 0)
+      print("/%s: Directory (size %d)" % (entry_path, entry_size))
       try:
         os.mkdir(system_path)
       except FileExistsError:
         pass
-      path += [(entry_name, f.tell() + directory_size - 4)]
+      path += [(entry_name, f.tell() + entry_size - 4)]
     else:
       # Read a file
-      file_size = read32(f)
-      file_offset = read32(f)
-      print("File (at %d, %d bytes) in '%s'" % (file_offset, file_size, "/".join(usable_path)))
-      extract_file(f, file_offset, file_size, system_path)
-    print(entry_name)
+      data_offset = read32(f)
+      assert(data_offset % 2048 == 0)
+      print("/%s: File (size %d, offset %d)" % (entry_path, entry_size, data_offset))
+      extract_file(f, data_offset, entry_size, system_path)
+    #print(entry_name)
 
     while len(path) > 0 and f.tell() >= path[-1][1]:
       directory_end = path.pop(-1)[1]
       assert(f.tell() == directory_end)
 
-  assert(f.tell() == root_directory_end)
+  # Inform user
+  print()
+  print("Extraction complete")
+
+  assert(root_directory_end == f.tell())
