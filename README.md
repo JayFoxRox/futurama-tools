@@ -26,7 +26,9 @@ Hence, I used the [information on the Xentax Wiki](http://wiki.xentax.com/index.
 ### Media: nif
 
 Later, I added support "nif" support, by extending nif.xml for [NifTools (including blender-plugin)](https://github.com/niftools/blender_nif_plugin).
-The [modified nif.xml can be found in my futurama-tools-nifxml repository](https://github.com/JayFoxRox/futurama-tools-nifxml/).
+The [modified nif.xml (base version 0.9) can be found in my futurama-tools-nifxml repository](https://github.com/JayFoxRox/futurama-tools-nifxml/).
+You'll need `pip install --user -U git+https://github.com/neomonkeus/pyffi.git@hfloat`.
+
 I quickly gave up on this, because:
 
 * `nifskope` uses nif.xml 0.9 and newer.
